@@ -1,0 +1,47 @@
+root@alpha:~# ab -n 250 -c 10 http://static.k-43.com/   
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking static.k-43.com (be patient)
+Completed 100 requests
+Completed 200 requests
+Finished 250 requests
+
+
+Server Software:        nginx
+Server Hostname:        static.k-43.com
+Server Port:            80
+
+Document Path:          /
+Document Length:        54 bytes
+
+Concurrency Level:      10
+Time taken for tests:   0.256 seconds
+Complete requests:      250
+Failed requests:        125
+   (Connect: 0, Receive: 0, Length: 125, Exceptions: 0)
+Total transferred:      46125 bytes
+HTML transferred:       13625 bytes
+Requests per second:    976.05 [#/sec] (mean)
+Time per request:       10.245 [ms] (mean)
+Time per request:       1.025 [ms] (mean, across all concurrent requests)
+Transfer rate:          175.86 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    1   0.3      1       2
+Processing:     2    4   9.3      3     150
+Waiting:        2    4   9.3      3     149
+Total:          3    5   9.3      4     151
+
+Percentage of the requests served within a certain time (ms)
+  50%      4
+  66%      4
+  75%      4
+  80%      5
+  90%      5
+  95%      5
+  98%     10
+  99%     10
+ 100%    151 (longest request)
