@@ -1,6 +1,6 @@
 # Komdat & Jaringan Komputer Modul 2 : DNS, Web Server, dan Reverse Proxy
-> Domain Kelompok = k01.com
-> Prefix IP = 192.168.x.x (Disesuaikan dengan topologi masing-masing)
+> Domain Kelompok = k-43.com
+> Prefix IP = 10.85.x.x
 
 ## Anggota
 
