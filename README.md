@@ -6,8 +6,8 @@
 
 | NAMA | NRP |
 | ------------- | -------------- | 
-| I Ketut Weda Adikusuma | [5027251061] |
-| [D`qhaizhar Ari Dhiaulhaq] | [5027251083] |
+| I Ketut Weda Adikusuma | 5027251061 |
+| D`qhaizhar Ari Dhiaulhaq | 5027251083 |
 
 ---
 
@@ -26,173 +26,197 @@ iface eth0 inet dhcp
 
 auto eth1
 iface eth1 inet static
-address 192.168.1.1
+address 10.85.1.1
 netmask 255.255.255.0
 
 auto eth2
 iface eth2 inet static
-address 192.168.2.1
+address 10.85.2.1
+netmask 255.255.255.0
+
+auto eth3
+iface eth3 inet static
+address 10.85.3.1
+netmask 255.255.255.0
+
+auto eth4
+iface eth4 inet static
+address 10.85.4.1
+netmask 255.255.255.0
+
+auto eth5
+iface eth5 inet static
+address 10.85.5.1
 netmask 255.255.255.0
 ```
+![Router](./images/1-router.png)
+
 
 ## Step 2: Konfigurasi NAT
 ### Soal
 Buka jalur menuju NAT dengan memastikan antarmuka WAN di router rootkit aktif. Konfigurasikan NAT agar dapat meneruskan lalu lintas keluar bagi seluruh alamat internal.
 
 ### Konfigurasi (di Rootkit)
-``bash
+```bash
 iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
 ```
+
+
 ## Step 3: Routing Internal & Resolver Awal
 ### Soal
 Pastikan seluruh Entitas dapat saling terhubung dan berkomunikasi lintas jalur. Tambahkan resolver 192.168.122.1 saat antarmukanya aktif agar akses internet tersedia di awal.
 
 ### Konfigurasi
 Di Rootkit, aktifkan IP forwarding:
-
 ```bash
 sysctl -w net.ipv4.ip_forward=1
 ```
-Di semua node non-router, tambahkan resolver awal:
+
+Di semua node non-router, tambahkan resolver awal pada `/etc/resolv.conf`:
 ```bash
 echo "nameserver 192.168.122.1" > /etc/resolv.conf
 ```
+![Resolve Test](./images/3-resolve.png)
+
+
 ## Step 4: DNS Server (Master & Slave)
 ### Soal
-Bangun zona `k01.com` sebagai authoritative di node `prab` dengan SOA ke `prab.k01.com`. Konfigurasi `tedd` sebagai slave. Atur DNS resolver urut: prab -> tedd -> 192.168.122.1.
+Bangun zona `k-43.com` sebagai authoritative di node `prab` dengan SOA ke `prab.k-43.com`. Konfigurasi `tedd` sebagai slave. Atur DNS resolver berurut: prab -> tedd -> 192.168.122.1.
 
 ### Konfigurasi prab (Master)
-Edit /etc/bind/named.conf.local:
-
+Edit `/etc/bind/named.conf.local`:
 ```bash
-zone "k01.com" {
-    type master;
-    file "/etc/bind/k01/k01.com";
-    allow-transfer { IP_TEDD; };
-    notify yes;
+zone "k-43.com" {
+  type master;
+  file "/etc/bind/jarkom/k-43.com";
+  allow-transfer { 10.85.1.3; };
+  notify yes;
 };
 ```
+![Zone Config](./images/4-zone.png)
+![SOA Config](./images/4-soa.png)
+
 ### Konfigurasi tedd (Slave)
-
+Edit `/etc/bind/named.conf.local`:
 ```bash
-zone "k01.com" {
-    type slave;
-    file "/var/lib/bind/k01.com";
-    masters { IP_PRAB; };
+zone "k-43.com" {
+  type slave;
+  file "/etc/bind/k-43.com";
+  masters { 10.85.1.2; };
 };
 ```
+![Ping Test](./images/4-ping.png)
+
 
 ## Step 5 & 6: Hostnames & Zone Transfer
-## Soal
+### Soal
 Namai semua Entitas (hostname) sesuai glosarium. Buat setiap domain untuk masing-masing node dan assign IP. Verifikasi zone transfer agar tedd menerima salinan zona terbaru dari prab dengan nilai serial SOA yang sama.
 
-### Konfigurasi Bash (Prab & Tedd)
-Di node prab (Master DNS):
-Tambahkan A Record untuk semua entitas dengan melakukan echo ke dalam file konfigurasi zona.
-
+### Konfigurasi (Prab)
+Menambahkan A Record untuk semua entitas:
 ```bash
-# Menambahkan record ke file zona k01.com
-cat << EOF >> /etc/bind/k01/k01.com
-alpha   IN A [IP_ALPHA]
-beta    IN A [IP_BETA]
-gamma   IN A [IP_GAMMA]
-delta   IN A [IP_DELTA]
-epsilon IN A [IP_EPSILON]
-abbey   IN A [IP_ABBEY]
-penny   IN A [IP_PENNY]
-obladi  IN A [IP_OBLADI]
-desmond IN A [IP_DESMOND]
-oblada  IN A [IP_OBLADA]
-molly   IN A [IP_MOLLY]
+cat << "EOF" > /etc/bind/jarkom/k-43.com
+$TTL    604800
+@       IN      SOA     prab.k-43.com. root.k-43.com. (
+                        2026092903 ; Serial
+                        604800     ; Refresh
+                        86400      ; Retry
+                        2419200    ; Expire
+                        604800 )   ; Negative Cache TTL
+;
+@       IN      NS      prab.k-43.com.
+@       IN      NS      tedd.k-43.com.
+
+prab    IN      A       10.85.1.2       
+tedd    IN      A       10.85.1.3
+rootkit IN      A       10.85.1.1
+alpha   IN      A       10.85.3.2
+beta    IN      A       10.85.3.3
+gamma   IN      A       10.85.3.4
+delta   IN      A       10.85.4.2
+epsilon IN      A       10.85.4.3
+abbey   IN      A       10.85.2.2
+penny   IN      A       10.85.5.2
+obladi  IN      A       10.85.1.4
+desmond IN      A       10.85.1.5
+oblada  IN      A       10.85.1.6
+molly   IN      A       10.85.1.7
 EOF
-
-# Restart bind9 untuk menerapkan konfigurasi
 service bind9 restart
 ```
-Di node tedd (Slave DNS):
-Cek apakah zona berhasil di-transfer dari prab.
-```bash
-# Restart bind9
-service bind9 restart
-
-# Memeriksa isi dari file transfer untuk memastikan SOA sama
-cat /var/lib/bind/k01.com
-```
+![Hostname Set](./images/5-name.png)
+![Serial Match](./images/6-serial.png)
 
 
 ## Step 7: CNAME & Load Balancer Domains
 ### Soal
-Tambahkan A record untuk `vault.k01.com` dan `core.k01.com`. Tetapkan CNAME `www -> penny`, dan `static -> abbey`.
+Tambahkan A record untuk `vault.k-43.com` dan `core.k-43.com` (Load Balancer 2 node). Tetapkan CNAME `www -> penny`, dan `static -> abbey`.
 
-Konfigurasi (di `prab` zona `k01.com`)
-
+### Konfigurasi (di prab)
+Tambahkan pada file zona `k-43.com`:
 ```bash
-vault IN A [IP_OBLADI]
-vault IN A [IP_DESMOND]
-core  IN A [IP_OBLADA]
-core  IN A [IP_MOLLY]
-www   IN CNAME penny
-static IN CNAME abbey
+vault   IN      A       10.85.1.4
+vault   IN      A       10.85.1.5
+
+core    IN      A       10.85.1.6
+core    IN      A       10.85.1.7
+
+www     IN      CNAME   penny
+static  IN      CNAME   abbey
 ```
+![CNAME Setup](./images/7-CNAME.png)
+![Test DNS 1](./images/7-tesdev1.png)
+![Test DNS 2](./images/7-tesdev2.png)
+
 
 ## Step 8: Reverse Zone
 ### Soal
 Deklarasikan reverse zone untuk segmen jaringan abbey, penny, area vault, dan area core di prab. Tarik reverse zone tersebut ke tedd sebagai slave, dan tambahkan PTR record.
 
-### Konfigurasi
-Di node prab (Master):
+### Konfigurasi (Prab)
 ```bash
-# Tambahkan deklarasi reverse zone di named.conf.local
-cat << EOF >> /etc/bind/named.conf.local
-zone "x.168.192.in-addr.arpa" {
+cat << "EOF" >> /etc/bind/named.conf.local
+zone "1.85.10.in-addr.arpa" {
     type master;
-    file "/etc/bind/k01/x.168.192.in-addr.arpa";
-    allow-transfer { [IP_TEDD]; };
-    notify yes;
+    file "/etc/bind/jarkom/1.85.10.in-addr.arpa";
+    allow-transfer { 10.85.1.3; };
+};
+zone "2.85.10.in-addr.arpa" {
+    type master;
+    file "/etc/bind/jarkom/2.85.10.in-addr.arpa";
+    allow-transfer { 10.85.1.3; };
+};
+zone "5.85.10.in-addr.arpa" {
+    type master;
+    file "/etc/bind/jarkom/5.85.10.in-addr.arpa";
+    allow-transfer { 10.85.1.3; };
 };
 EOF
-
-# Buat file konfigurasi reverse zone
-cat << EOF > /etc/bind/k01/x.168.192.in-addr.arpa
-\$TTL 604800
-@ IN SOA prab.k01.com. admin.k01.com. (
-      2026100201 ; Serial
-      604800     ; Refresh
-      86400      ; Retry
-      2419200    ; Expire
-      604800 )   ; Negative Cache TTL
-
-@ IN NS prab.k01.com.
-@ IN NS tedd.k01.com.
-
-[Oktet_IP_Abbey] IN PTR abbey.k01.com.
-[Oktet_IP_Penny] IN PTR penny.k01.com.
-[Oktet_IP_Vault] IN PTR vault.k01.com.
-[Oktet_IP_Core]  IN PTR core.k01.com.
-EOF
-
-service bind9 restart
 ```
+Lalu buat PTR Record:
+```bash
+4 IN PTR vault.k-43.com.
+5 IN PTR vault.k-43.com.
+6 IN PTR core.k-43.com.
+7 IN PTR core.k-43.com.
+```
+![Reverse Master](./images/8-author.png)
+![Reverse Slave](./images/8-reverse-slave.png)
+![Reverse Testing](./images/8-query.png)
 
 
 ## Step 9: Web Statis (Vault: Obladi & Desmond)
 ### Soal
-JJalankan layanan web statis pada area vault (Apache). Buka direktori /arsip/ dan aktifkan fitur autoindex (directory listing) pada konfigurasi Apache.
+Jalankan layanan web statis pada area vault (Apache). Buka direktori `/arsip/` dan aktifkan fitur autoindex (directory listing) pada konfigurasi Apache.
 
 ### Konfigurasi Bash (Obladi & Desmond)
 ```bash
-apt-get update && apt-get install apache2 -y
-
-# Buat direktori arsip
+apt-get install apache2 -y
 mkdir -p /var/www/html/arsip
-echo "File Rahasia" > /var/www/html/arsip/rahasia.txt
 
-# Konfigurasi Virtual Host untuk mengaktifkan Autoindex
 cat << 'EOF' > /etc/apache2/sites-available/000-default.conf
 <VirtualHost *:80>
-    ServerName vault.k01.com
     DocumentRoot /var/www/html
-
     <Directory /var/www/html/arsip>
         Options +Indexes
         AllowOverride None
@@ -200,219 +224,227 @@ cat << 'EOF' > /etc/apache2/sites-available/000-default.conf
     </Directory>
 </VirtualHost>
 EOF
-
-a2ensite 000-default.conf
 service apache2 restart
 ```
+![Autoindex](./images/9-autoindex.png)
+![Directory Listing](./images/9-directory.png)
+
 
 ## Step 10: Web Dinamis (Core: Oblada & Molly)
 ### Soal
-Jalankan Nginx & PHP-FPM di area core. Buat aplikasi profil dan terapkan URL rewrite ke /profil (tanpa .php).
+Jalankan Nginx & PHP-FPM di area core. Buat aplikasi profil dan terapkan URL rewrite ke `/profil` (tanpa .php).
 
 ### Konfigurasi (Oblada & Molly)
-
-``bash
-location /profil {
-    try_files $uri $uri/ /profil.php?$query_string;
-}
-```
-
-## Step 11 & 12: Reverse Proxy & Basic Auth
-### Soal
-Penny proksi ke Vault (Apache), Abbey proksi ke Core (Nginx). Terapkan Basic Auth di Penny path /admin (user: prabs).
-
-### Konfigurasi Penny (Apache Reverse Proxy & Auth)
-
 ```bash
+apt install php php-fpm nginx -y
+
+# Konfigurasi Nginx Default
+cat << "EOF" > /etc/nginx/sites-available/default 
+server {
+    listen 80 default_server;
+    root /var/www/html;
+    index index.php index.html index.htm;
+    
+    location / {
+        try_files $uri $uri/ $uri.php?$args;
+    }
+    location ~ \.php$ {
+        include snippets/fastcgi-php.conf;
+        fastcgi_pass unix:/run/php/php8.4-fpm.sock;
+    }
+}
+EOF
+
+echo "<?php echo '<h1>Halaman Profil</h1><p>Ini adalah profil entitas ' . gethostname() . '</p>'; ?>" > /var/www/html/profil.php
+service php8.4-fpm start
+service nginx restart
+```
+![Nginx Test](./images/10-curl.png)
+![Profil Page](./images/10-dinamiss.png)
+
+
+## Step 11: Reverse Proxy 
+### Soal
+Penny diproyeksikan sebagai proksi menuju Vault (Apache), dan Abbey menuju Core (Nginx). Konfigurasi Penny dan Abbey untuk melakukan *Load Balancing* ke backend masing-masing.
+
+### Konfigurasi Penny (Apache Reverse Proxy)
+```bash
+a2enmod proxy proxy_http proxy_balancer lbmethod_byrequests headers
+
+cat << "EOF" > /etc/apache2/sites-available/000-default.conf
+<VirtualHost *:80>
+    ServerName penny.k-43.com
+    ProxyPreserveHost On
+    RequestHeader set X-Real-IP expr=%{REMOTE_ADDR}
+
+    <Proxy balancer://vaultcluster>
+        BalancerMember http://10.85.1.4
+        BalancerMember http://10.85.1.5
+    </Proxy>
+
+    ProxyPass / balancer://vaultcluster/
+    ProxyPassReverse / balancer://vaultcluster/
+</VirtualHost>
+EOF
+service apache2 restart
+```
+![Abbey Proxy Test](./images/11-staticipx.png)
+
+
+## Step 12: Basic Auth
+### Soal
+Terapkan Basic Auth di Penny pada direktori khusus `/admin` menggunakan otentikasi valid-user.
+
+### Konfigurasi (Penny)
+```bash
+htpasswd -c /etc/apache2/.htpasswd prabs
+
+# Konfigurasi Apache virtual host
 <Location /admin>
     AuthType Basic
-    AuthName "Restricted Admin Area"
+    AuthName "Restricted Area"
     AuthUserFile /etc/apache2/.htpasswd
     Require valid-user
 </Location>
 ```
+![Admin Test](./images/12-admindir.png)
+![Auth Prompt](./images/12-pasword.png)
+![Auth Access](./images/12-pennyadmin.png)
+![Testing Auth](./images/12-test.png)
 
-Pembuatan kredensial:
-`htpasswd -c /etc/apache2/.htpasswd prabs`
 
 ## Step 13: HTTP Redirects
 ### Soal
-Akses IP/domain penny -> redirect permanen (301) ke www.k01.com. Akses IP/domain abbey -> redirect sementara (302) ke static.k01.com.
+Akses ke IP/domain penny harus di-redirect permanen (301) ke `www.k-43.com`. Akses ke IP/domain abbey harus di-redirect sementara (302) ke `static.k-43.com`.
 
-### Konfigurasi
-Di Penny (`Apache`): Redirect 301 / http://www.k01.com/
-Di Abbey (`Nginx`): return 302 http://static.k01.com$request_uri;
-
-### Konfigurasi Bash
-Di node Penny (Apache):
-```bash
-cat << EOF > /etc/apache2/sites-available/penny-redirect.conf
-<VirtualHost *:80>
-    ServerName penny.k01.com
-    ServerAlias [IP_PENNY]
-    Redirect 301 / http://www.k01.com/
-</VirtualHost>
-EOF
-a2ensite penny-redirect.conf
-service apache2 restart
-```
-
-Di node Abbey (Nginx):
-```bash
-cat << 'EOF' > /etc/nginx/sites-available/abbey-redirect
+### Konfigurasi (Abbey - Nginx Redirect 302)
+```nginx
 server {
     listen 80;
-    server_name abbey.k01.com [IP_ABBEY];
-    return 302 http://static.k01.com$request_uri;
+    server_name abbey.k-43.com 10.85.2.2;
+    return 302 http://static.k-43.com$request_uri;
 }
-EOF
-ln -s /etc/nginx/sites-available/abbey-redirect /etc/nginx/sites-enabled/
-service nginx restart
 ```
+### Konfigurasi (Penny - Apache Redirect 301)
+```apache
+<VirtualHost *:80>
+    ServerName penny.k-43.com
+    ServerAlias 10.85.5.2
+    Redirect 301 / http://www.k-43.com/
+</VirtualHost>
+```
+![Redirect Abbey Test](./images/13-nginxredir.png)
+![Redirect Abbey Config](./images/13-nginxredirtest.png)
+![Redirect Penny Config](./images/13-redir.png)
+![Redirect Penny Test](./images/13-redirtest.png)
+
 
 ## Step 14: Forwarded IP Access Log
 ### Soal
-Pastikan access log pada setiap server web backend di area vault dan core mencatat alamat IP asli klien, bukan IP milik Penny atau Abbey
+Pastikan access log pada server web backend (Vault dan Core) mencatat IP asli klien, bukan IP milik Penny atau Abbey.
 
 ### Konfigurasi
-Di node Backend Core (Nginx di Oblada & Molly):
+Untuk backend Vault (Apache), gunakan `RemoteIPHeader` dengan modul `remoteip`:
 ```bash
-# Menambahkan modul real_ip untuk membaca dari Proxy (Abbey)
-sed -i '/http {/a \    set_real_ip_from [IP_ABBEY];\n    real_ip_header X-Real-IP;' /etc/nginx/nginx.conf
-service nginx restart
-```
-
-Di node Backend Vault (Apache di Obladi & Desmond):
-```bash
-# Mengaktifkan modul remoteip dan menyesuaikan konfigurasi
 a2enmod remoteip
-sed -i '/<VirtualHost/a \    RemoteIPHeader X-Forwarded-For\n    RemoteIPInternalProxy [IP_PENNY]' /etc/apache2/sites-available/000-default.conf
-
-# Ubah format log dari %h menjadi %a (client IP)
-sed -i 's/LogFormat "%h/LogFormat "%a/g' /etc/apache2/apache2.conf
-service apache2 restart
 ```
+Ubah format log menjadi `%a` di `apache2.conf`.
+
+Untuk backend Core (Nginx), tambahkan modul `realip`:
+```nginx
+set_real_ip_from 10.85.2.2;
+real_ip_header X-Real-IP;
+```
+![Logs Vault](./images/14-logs.png)
+![Logs Core](./images/14-curls.png)
+
 
 ## Step 15: Special Proxies (/eternal dan /orion)
 ### Soal
-Pada Penny, buat reverse proxy independen untuk `/eternal` yang menyajikan `/var/www/eternal` (mendukung rendering PHP). Pada Abbey, buat `/orion` yang menyajikan `/var/www/orion` secara statis
+Pada Penny, buat reverse proxy untuk path `/eternal` yang menyajikan direktori lokal (bukan ke vault). Pada Abbey, buat path `/orion` yang disajikan murni statis secara lokal.
 
-### Konfigurasi
-Di node Penny (Apache):
-```bash
-mkdir -p /var/www/eternal
-echo "<?php phpinfo(); ?>" > /var/www/eternal/index.php
-
-# Tambahkan Alias pada VirtualHost www.k01.com yang sudah ada
-sed -i '/<\/VirtualHost>/i \    Alias /eternal /var/www/eternal\n    <Directory /var/www/eternal>\n        Require all granted\n    </Directory>' /etc/apache2/sites-available/www.conf
-service apache2 restart
+### Konfigurasi (Penny)
+Gunakan direktif `Alias` di luar blok Load Balancer agar tidak diforward ke backend:
+```apache
+Alias /eternal /var/www/eternal
+ProxyPass /eternal !
 ```
-
-Di node Abbey (Nginx):
-```bash
-mkdir -p /var/www/orion
-echo "Halaman Orion Murni Statis" > /var/www/orion/index.html
-
-# Tambahkan path /orion pada block proxy static.k01.com
-sed -i '/location \/ {/i \    location /orion {\n        alias /var/www/orion/;\n    }' /etc/nginx/sites-available/static
-service nginx restart
+### Konfigurasi (Abbey)
+Tambahkan blok `location /orion` untuk melayani isi direktori secara lokal:
+```nginx
+location /orion {
+    alias /var/www/orion/;
+}
 ```
+![Penny Eternal Test](./images/15-pennyeternal.png)
+![Penny Proxy Test](./images/15-pennyproxy.png)
+
 
 ## Step 16: ApacheBench Stress Test
 ### Soal
-Klien Alpha melakukan stress test benchmark menggunakan ApacheBench. Lakukan 250 requests dengan konkurensi 10 untuk [www.xxx.com](https://www.xxx.com) dan static.xxx.com
+Klien melakukan stress test benchmark menggunakan ApacheBench dengan total 250 request dan level konkurensi 10.
 
-### Konfigurasi Bash (di node Alpha/Client)
+### Konfigurasi Bash
 ```bash
-apt-get update && apt-get install apache2-utils -y
-
 # Test endpoint dinamis (www)
-ab -n 250 -c 10 http://www.k01.com/
+ab -n 250 -c 10 http://www.k-43.com/
 
 # Test endpoint statis (static)
-ab -n 250 -c 10 http://static.k01.com/
+ab -n 250 -c 10 http://static.k-43.com/
 ```
+
 
 ## Step 17: TXT Record Klien
 ### Soal
-Tambahkan TXT record untuk mengembalikan nama hostname klien sayap kiri dan kanan.
+Tambahkan TXT record pada Authoritative DNS (Prab) untuk mengembalikan informasi teks berisikan nama-nama klien.
 
 ### Konfigurasi (di prab)
 ```bash
-alpha IN TXT "alpha"
-beta IN TXT "beta"
+alpha   IN      TXT     "alpha"
+beta    IN      TXT     "beta"
+gamma   IN      TXT     "gamma"
+delta   IN      TXT     "delta"
+epsilon IN      TXT     "epsilon"
 ```
+![Adding TXT](./images/17-addingtxt.png)
+![Test TXT](./images/17-test.png)
+
 
 ## Step 18: TTL dan DNS Cache Check
 ### Soal
-Ubah A record milik abbey.xxx.com ke alamat IP fiktif secara acak[cite: 12]. Naikkan serial SOA, tetapkan TTL sebesar 15 detik[cite: 12]. Verifikasi dari klien sebelum perubahan, saat 15 detik berjalan (cache), dan setelah batas kadaluarsa.
+Ubah A record milik `abbey` ke alamat IP fiktif secara acak dengan TTL sebesar 15 detik. Naikkan serial SOA. Verifikasi dari klien efek pergantian alamat IP tersebut saat cache masih berlaku dan sesudahnya.
 
-### Konfigurasi Bash
-Di node prab (Master):
+### Konfigurasi (di prab)
 ```bash
-# Ubah IP abbey menjadi IP fiktif (misal 10.99.99.99) dengan TTL 15
-sed -i 's/abbey IN A .*/abbey 15 IN A 10.99.99.99/g' /etc/bind/k01/k01.com
-
-# Ingat untuk memperbarui nilai serial secara manual di file zona
-# Setelah itu restart service
-service bind9 restart
+abbey   15      IN      A       67.67.67.67
 ```
+![TTL Check Test](./images/18-ip67.png)
 
-Pengujian di Alpha (Client):
-```bash
-# 1. Cek pertama
-dig abbey.k01.com
-
-# 2. Tunggu 15 Detik
-sleep 15
-
-# 3. Cek kedua, IP harus sudah berubah ke IP fiktif
-dig abbey.k01.com
-```
 
 ## Step 19: Outbound CNAME
 ### Soal
-Buat CNAME record dari outbound.xxx.com menuju http.badssl.com[cite: 12]. Verifikasi output menggunakan curl[cite: 12].
+Buat CNAME record dari `outbound.k-43.com` menuju domain `http.badssl.com` untuk memfasilitasi akses keluar, dan buktikan dengan `curl`.
 
-### Konfigurasi Bash
-Di node prab (Master):
+### Konfigurasi (di prab)
 ```bash
-echo "outbound IN CNAME http.badssl.com." >> /etc/bind/k01/k01.com
-service bind9 restart
+outbound IN CNAME http.badssl.com.
+```
+```bash
+curl -I http://outbound.k-43.com
 ```
 
-Di node Alpha (Client):
-```bash
-curl http://outbound.k01.com
-```
 
 ## Step 20: Persistence (Autostart Services)
 ### Soal
-Pastikan semua service dan konfigurasi berjalan normal dan berstatus autostart saat node di-restart[cite: 12].
+Seluruh pengerjaan dan konfigurasi jaringan di atas tidak boleh hilang apabila GNS3 dan setiap node-nya di-*restart*.
 
 ### Konfigurasi Bash
-Agar aman setiap kali node GNS3 dinyalakan ulang, kita perlu mendaftarkan command start ke dalam /root/.bashrc.
-
-Di Node DNS (prab & tedd):
+Agar aman, command startup instalasi package dan menjalankan service ditempatkan pada script khusus yang akan dijalankan oleh `/root/.bashrc` di tiap-tiap node, misalnya:
 ```bash
-echo "service bind9 start" >> ~/.bashrc
+if [ ! -f /tmp/boot_setup_done ]; then
+    apt update && apt upgrade -y && apt install nginx -y
+    service nginx start
+    touch /tmp/boot_setup_done
+fi
 ```
-
-Di Node Apache (Penny, Obladi, Desmond):
-```bash
-echo "service apache2 start" >> ~/.bashrc
-```
-
-Di Node Nginx & PHP (Abbey, Oblada, Molly):
-```bash
-echo "service nginx start" >> ~/.bashrc
-echo "service php8.1-fpm start" >> ~/.bashrc # Sesuaikan versi PHP
-```
-
-Khusus Router (Rootkit) untuk IPTables:
-```bash
-cat << 'EOF' >> ~/.bashrc
-sysctl -w net.ipv4.ip_forward=1
-iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
-EOF
-```
+Ini memastikan saat server mati dan hidup kembali, seluruh pengaturan akan dikembalikan secara otomatis seperti semula tanpa intervensi manusia.
