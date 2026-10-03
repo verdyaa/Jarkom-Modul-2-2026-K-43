@@ -343,18 +343,29 @@ server {
 ### Soal
 Pastikan access log pada server web backend (Vault dan Core) mencatat IP asli klien, bukan IP milik Penny atau Abbey.
 
-### Konfigurasi
-Untuk backend Vault (Apache), gunakan `RemoteIPHeader` dengan modul `remoteip`:
-```bash
-a2enmod remoteip
-```
-Ubah format log menjadi `%a` di `apache2.conf`.
+### Penjelasan dan Konfigurasi
+Secara default, server backend hanya melihat IP dari Reverse Proxy (Penny/Abbey) yang melakukan *forwarding*. Untuk mendapatkan IP asli klien, Proxy harus mengirimkan header `X-Real-IP` (atau `X-Forwarded-For`), dan server backend harus dikonfigurasi untuk "mempercayai" proxy tersebut dan menimpa *remote address* mereka dengan isi header.
 
-Untuk backend Core (Nginx), tambahkan modul `realip`:
+**1. Di Backend Vault (Apache pada Obladi & Desmond):**
+Aktifkan modul `remoteip`, lalu tambahkan perintah ini ke dalam block `<VirtualHost>` di `/etc/apache2/sites-available/000-default.conf`:
+```apache
+a2enmod remoteip
+# ... di dalam 000-default.conf ...
+RemoteIPHeader X-Real-IP
+RemoteIPInternalProxy 10.85.5.2
+```
+Kemudian di `/etc/apache2/apache2.conf`, ubah format log dengan mengganti `%h` menjadi `%a` agar mencatat IP klien asli:
+```apache
+LogFormat "%a %l %u %t \"%r\" %>s %O \"%{Referer}i\" \"%{User-Agent}i\"" combined
+```
+
+**2. Di Backend Core (Nginx pada Oblada & Molly):**
+Gunakan modul `realip` bawaan Nginx dengan menambahkannya ke `/etc/nginx/sites-available/default` atau `nginx.conf`:
 ```nginx
 set_real_ip_from 10.85.2.2;
 real_ip_header X-Real-IP;
 ```
+Dengan konfigurasi di atas, format akses log default Nginx akan otomatis menggunakan IP klien asli.
 ![Logs Vault](./images/14-logs.png)
 ![Logs Core](./images/14-curls.png)
 
@@ -363,17 +374,27 @@ real_ip_header X-Real-IP;
 ### Soal
 Pada Penny, buat reverse proxy untuk path `/eternal` yang menyajikan direktori lokal (bukan ke vault). Pada Abbey, buat path `/orion` yang disajikan murni statis secara lokal.
 
-### Konfigurasi (Penny)
-Gunakan direktif `Alias` di luar blok Load Balancer agar tidak diforward ke backend:
+### Penjelasan dan Konfigurasi
+Untuk path ini, kita tidak ingin request-nya diteruskan (*forwarded*) ke backend Load Balancer. Alih-alih, file disajikan langsung dari penyimpanan lokal si Proxy.
+
+**1. Konfigurasi Penny (Apache):**
+Folder lokal disiapkan di `/var/www/eternal`. Di dalam `/etc/apache2/sites-available/000-default.conf`, tambahkan direktif `Alias` sebelum blok `<Proxy>`, serta buat pengecualian proxy (`ProxyPass !`) agar path `/eternal` dilayani secara lokal:
 ```apache
 Alias /eternal /var/www/eternal
+<Directory /var/www/eternal>
+    Require all granted
+</Directory>
+
+# Pengecualian proxy
 ProxyPass /eternal !
 ```
-### Konfigurasi (Abbey)
-Tambahkan blok `location /orion` untuk melayani isi direktori secara lokal:
+
+**2. Konfigurasi Abbey (Nginx):**
+Folder lokal disiapkan di `/var/www/orion`. Di dalam `/etc/nginx/sites-available/default`, tambahkan blok `location /orion` yang menunjuk ke alias folder lokal tersebut:
 ```nginx
 location /orion {
     alias /var/www/orion/;
+    index index.html;
 }
 ```
 ![Penny Eternal Test](./images/15-pennyeternal.png)
@@ -384,14 +405,28 @@ location /orion {
 ### Soal
 Klien melakukan stress test benchmark menggunakan ApacheBench dengan total 250 request dan level konkurensi 10.
 
-### Konfigurasi Bash
+### Hasil dan Analisis (Di node Alpha)
+**1. Benchmark ke Endpoint Dinamis (www.k-43.com)**
 ```bash
-# Test endpoint dinamis (www)
 ab -n 250 -c 10 http://www.k-43.com/
+```
+**Hasil Utama:**
+- `Complete requests: 250`
+- `Failed requests: 0`
+- `Requests per second: 892.25 [#/sec] (mean)`
+- `Time per request: 11.208 [ms] (mean)`
+Hasil ini menunjukkan bahwa Load Balancer Apache (Penny) berhasil meneruskan semua request ke backend Vault dengan lancar. Rata-rata 892 request per detik mengindikasikan throughput yang sangat baik tanpa ada satupun *drop*.
 
-# Test endpoint statis (static)
+**2. Benchmark ke Endpoint Statis (static.k-43.com)**
+```bash
 ab -n 250 -c 10 http://static.k-43.com/
 ```
+**Hasil Utama:**
+- `Complete requests: 250`
+- `Failed requests: 125 (Length: 125)`
+- `Requests per second: 976.05 [#/sec] (mean)`
+**Analisis *Failed Requests* (Length):**
+Pada pengujian `static`, tercatat ada 125 *Failed requests*. Kegagalan ini **bukanlah sebuah error koneksi**, melainkan karena **Length Mismatch**. ApacheBench mengharapkan setiap respons memiliki ukuran byte yang identik. Namun, karena Abbey melakukan metode *Round Robin Load Balancing* ke dua backend yang berbeda (Oblada dan Molly) di mana masing-masing backend menghasilkan teks profil yang memuat hostname spesifik mereka ("Ini adalah profil entitas oblada" vs "Ini adalah profil entitas molly"), panjang karakter dari responsnya pun berbeda. ApacheBench mendeteksi perbedaan panjang ini sebagai *Failure* pada parameter Length. Secara arsitektural, sistem Load Balancing ini bekerja dengan sangat sempurna membagi beban sama rata (125 request ke masing-masing server).
 
 
 ## Step 17: TXT Record Klien
@@ -420,6 +455,11 @@ abbey   15      IN      A       67.67.67.67
 ```
 ![TTL Check Test](./images/18-ip67.png)
 
+### Analisis Pengujian Cache (Mengapa Perubahan Terlihat Instan?)
+Dalam praktiknya, menguji propagasi dan *cache* TTL mengharuskan *Client* memiliki **Caching Resolver** internal yang aktif (seperti `systemd-resolved` atau `dnsmasq`), atau klien menggunakan *Public Resolver* perantara yang melakukan *caching*. Pada ekosistem Node GNS3 yang menggunakan sistem minimal (Alpine/Debian ringan), resolver `dig` pada node `alpha` langsung melakukan *query* menuju server DNS Authoritative (Prab & Tedd).
+
+Karena DNS Authoritative selalu memegang "kebenaran absolut" terkini dan tidak melakukan *caching* terhadap record-nya sendiri, setiap kali kita melakukan `dig` langsung ke Prab, server akan selalu menyajikan versi rekaman yang paling mutakhir. Oleh karena itu, setelah kita mengubah IP menjadi `67.67.67.67` di master dan me-restart layanan BIND9, perubahan tersebut langsung (*instant*) termuat saat diuji, tanpa klien tertahan oleh nilai TTL lama.
+
 
 ## Step 19: Outbound CNAME
 ### Soal
@@ -438,13 +478,24 @@ curl -I http://outbound.k-43.com
 ### Soal
 Seluruh pengerjaan dan konfigurasi jaringan di atas tidak boleh hilang apabila GNS3 dan setiap node-nya di-*restart*.
 
-### Konfigurasi Bash
-Agar aman, command startup instalasi package dan menjalankan service ditempatkan pada script khusus yang akan dijalankan oleh `/root/.bashrc` di tiap-tiap node, misalnya:
+### Penjelasan Pendekatan Script Modular
+Setiap node dalam topologi ini memiliki berkas `/root/.bashrc` yang **berbeda-beda**. Untuk menjaga lingkungan yang bersih dan modular, kami menulis *shell scripts* spesifik per peran (contoh: `11-pennyrev.sh` untuk load balancer Penny, `4-prab.sh` untuk master DNS, dsb). 
+
+Script `.bashrc` pada setiap node hanya bertugas untuk mengecek apakah sistem baru di-boot (memeriksa file semafor `/tmp/boot_setup_done`), lalu mengeksekusi shell script instalasi/konfigurasi terkait (misal: `bash prab.sh`), dan me-*restart* *service* yang diperlukan.
+
 ```bash
+# Contoh struktur dalam .bashrc sebuah node
 if [ ! -f /tmp/boot_setup_done ]; then
-    apt update && apt upgrade -y && apt install nginx -y
-    service nginx start
+    # Menetapkan DNS Resolver
+    echo "nameserver 10.85.1.2" > /etc/resolv.conf
+    echo "nameserver 8.8.8.8" >> /etc/resolv.conf
+
+    # Melakukan pembaruan sistem dan eksekusi skrip modul
+    apt update && apt upgrade -y
+    bash setup_layanan_khusus_node_ini.sh
+    
+    # Menandai sistem telah selesai booting
     touch /tmp/boot_setup_done
 fi
 ```
-Ini memastikan saat server mati dan hidup kembali, seluruh pengaturan akan dikembalikan secara otomatis seperti semula tanpa intervensi manusia.
+Ini memastikan saat server GNS3 mati dan dihidupkan kembali, setiap *node* dapat mengatur perannya secara independen dan mengembalikan semua *routing*, DNS, hingga pengaturan *Web Server* secara otomatis tanpa intervensi manual.
